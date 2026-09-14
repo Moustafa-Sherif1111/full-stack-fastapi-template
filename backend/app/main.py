@@ -7,6 +7,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from app.api.main import api_router
 from app.core.config import settings
+from app.middleware.rate_limit import SlidingWindowRateLimiter
 
 FRONTEND_DIR = Path(__file__).parent / "frontend"
 
@@ -31,6 +32,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# v1.1.0: rate limiting on auth endpoints
+app.add_middleware(SlidingWindowRateLimiter, max_requests=60, window_seconds=60)
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 app.frontend("/", directory=FRONTEND_DIR)

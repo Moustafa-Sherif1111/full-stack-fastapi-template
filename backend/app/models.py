@@ -10,6 +10,56 @@ def get_datetime_utc() -> datetime:
     return datetime.now(UTC)
 
 
+# ---------------------------------------------------------------------------
+# Tag  (new in v1.1.0)
+# ---------------------------------------------------------------------------
+
+class TagBase(SQLModel):
+    name: str = Field(min_length=1, max_length=64, index=True)
+    color: str | None = Field(default=None, max_length=7)  # hex colour e.g. #ff5733
+
+
+class TagCreate(TagBase):
+    pass
+
+
+class TagUpdate(SQLModel):
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    color: str | None = Field(default=None, max_length=7)
+
+
+# Many-to-many link table between Item and Tag
+class ItemTagLink(SQLModel, table=True):
+    item_id: uuid.UUID = Field(foreign_key="item.id", primary_key=True, ondelete="CASCADE")
+    tag_id: uuid.UUID = Field(foreign_key="tag.id", primary_key=True, ondelete="CASCADE")
+
+
+class Tag(TagBase, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    created_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+    owner_id: uuid.UUID = Field(foreign_key="user.id", nullable=False, ondelete="CASCADE")
+    owner: "User | None" = Relationship(back_populates="tags")
+    items: list["Item"] = Relationship(back_populates="tags", link_model=ItemTagLink)
+
+
+class TagPublic(TagBase):
+    id: uuid.UUID
+    owner_id: uuid.UUID
+    created_at: datetime | None = None
+
+
+class TagsPublic(SQLModel):
+    data: list[TagPublic]
+    count: int
+
+
+# ---------------------------------------------------------------------------
+# User
+# ---------------------------------------------------------------------------
+
 # Shared properties
 class UserBase(SQLModel):
     email: EmailStr = Field(unique=True, index=True, max_length=255)
@@ -56,7 +106,8 @@ class User(UserBase, table=True):
         default_factory=get_datetime_utc,
         sa_type=DateTime(timezone=True),  # type: ignore
     )
-    items: list[Item] = Relationship(back_populates="owner", cascade_delete=True)
+    items: list["Item"] = Relationship(back_populates="owner", cascade_delete=True)
+    tags: list[Tag] = Relationship(back_populates="owner", cascade_delete=True)
 
 
 # Properties to return via API, id is always required
@@ -70,6 +121,10 @@ class UsersPublic(SQLModel):
     count: int
 
 
+# ---------------------------------------------------------------------------
+# Item
+# ---------------------------------------------------------------------------
+
 # Shared properties
 class ItemBase(SQLModel):
     title: str = Field(min_length=1, max_length=255)
@@ -78,13 +133,14 @@ class ItemBase(SQLModel):
 
 # Properties to receive on item creation
 class ItemCreate(ItemBase):
-    pass
+    tag_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
 # Properties to receive on item update
 class ItemUpdate(SQLModel):
     title: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=255)
+    tag_ids: list[uuid.UUID] | None = None
 
 
 # Database model, database table inferred from class name
@@ -98,6 +154,7 @@ class Item(ItemBase, table=True):
         foreign_key="user.id", nullable=False, ondelete="CASCADE"
     )
     owner: User | None = Relationship(back_populates="items")
+    tags: list[Tag] = Relationship(back_populates="items", link_model=ItemTagLink)
 
 
 # Properties to return via API, id is always required
@@ -105,12 +162,17 @@ class ItemPublic(ItemBase):
     id: uuid.UUID
     owner_id: uuid.UUID
     created_at: datetime | None = None
+    tags: list[TagPublic] = []
 
 
 class ItemsPublic(SQLModel):
     data: list[ItemPublic]
     count: int
 
+
+# ---------------------------------------------------------------------------
+# Auth / generic
+# ---------------------------------------------------------------------------
 
 # Generic message
 class Message(SQLModel):
