@@ -138,7 +138,9 @@ jobs:
           SECRET_KEY: ${{ secrets.SECRET_KEY }}
           FIRST_SUPERUSER: ${{ vars.FIRST_SUPERUSER }}
           FIRST_SUPERUSER_PASSWORD: ${{ secrets.FIRST_SUPERUSER_PASSWORD }}
-        continue-on-error: true
+        # REMOVED: continue-on-error: true
+        # CRITICAL: Production database migrations MUST succeed
+        # Any failure here should immediately halt the deployment
 
       - name: Deploy to Production
         run: |
@@ -147,11 +149,15 @@ jobs:
           echo "Commit: ${{ github.sha }}"
           echo "Deployment time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           echo "✅ Production deployment simulation successful"
-        # In production, this would be:
-        # run: uv run fastapi deploy
+        # TODO: Replace with actual production deployment command
+        # CRITICAL: Ensure zero-downtime deployment strategy (blue-green, rolling, canary)
+        # Examples:
+        #   Docker: docker compose -f docker-compose.prod.yml up -d --no-deps --build api
+        #   Kubernetes: kubectl set image deployment/api api=registry/api:${{ github.sha }}
+        #   Cloud: aws ecs update-service --cluster prod --service api --force-new-deployment
+        #   FastAPI Cloud: uv run fastapi deploy --environment production
         # env:
-        #   FASTAPI_CLOUD_TOKEN: ${{ secrets.FASTAPI_CLOUD_TOKEN }}
-        #   FASTAPI_CLOUD_APP_ID: ${{ secrets.FASTAPI_CLOUD_APP_ID }}
+        #   DEPLOYMENT_TOKEN: ${{ secrets.PRODUCTION_DEPLOYMENT_TOKEN }}
 
       - name: Create deployment record
         if: always()
@@ -179,6 +185,13 @@ jobs:
           echo "✅ API responding correctly"
           echo "✅ Database operational"
           echo "✅ Frontend serving"
+        # TODO: Replace with actual production smoke tests
+        # CRITICAL: Verify deployment succeeded before marking as complete
+        # Examples:
+        #   curl -f https://api.example.com/api/v1/health || exit 1
+        #   curl -f https://api.example.com/api/v1/health/db || exit 1
+        #   curl -f https://example.com/ | grep -q "<!DOCTYPE html>" || exit 1
+        #   pytest tests/smoke/ --base-url=https://api.example.com --maxfail=1
 
       - name: Monitor deployment
         run: |
