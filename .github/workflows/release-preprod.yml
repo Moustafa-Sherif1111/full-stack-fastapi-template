@@ -69,6 +69,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Start test dependencies
+        run: |
+          docker compose down -v --remove-orphans
+          docker compose up -d --wait db mailpit
+
+      - name: Migrate DB
+        run: uv run bash scripts/prestart.sh
+        working-directory: backend
+
+      - name: Start backend server
+        run: |
+          uv run fastapi dev --host 0.0.0.0 --port 8000 &
+          sleep 5
+          curl --retry 10 --retry-delay 2 --retry-connrefused http://localhost:8000/api/v1/health || exit 1
+        working-directory: backend
+
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -82,6 +108,12 @@ jobs:
 
       - name: Run frontend tests
         run: bun run --filter frontend test
+        env:
+          VITE_API_URL: http://localhost:8000
+
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v --remove-orphans
         # REMOVED: continue-on-error: true
         # Frontend tests must pass for preprod deployment
         # If tests are flaky, fix them rather than ignoring failures
