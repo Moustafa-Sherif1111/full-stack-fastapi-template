@@ -77,6 +77,9 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      - name: Install Playwright browsers
+        run: bunx playwright install --with-deps chromium
+
       - name: Run frontend tests
         run: bun run --filter frontend test
         # REMOVED: continue-on-error: true
