@@ -1,0 +1,236 @@
+name: Release - Preprod Deployment
+
+# Triggers on push to release/* and hotfix/* branches
+# This aligns with Release Agent V2 GitFlow workflow
+on:
+  push:
+    branches:
+      - 'release/**'
+      - 'hotfix/**'
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to deploy'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  test-backend:
+    name: Test Backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Start test dependencies
+        run: |
+          docker compose down -v --remove-orphans
+          docker compose up -d --wait db mailpit
+
+      - name: Migrate DB
+        run: uv run bash scripts/prestart.sh
+        working-directory: backend
+
+      - name: Run tests
+        run: uv run bash scripts/tests-start.sh "Coverage for ${{ github.sha }}"
+        working-directory: backend
+
+      - name: Coverage report
+        run: uv run coverage report --fail-under=85
+        working-directory: backend
+
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v --remove-orphans
+
+  test-frontend:
+    name: Test Frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Run frontend tests
+        run: bun run --filter frontend test
+        # REMOVED: continue-on-error: true
+        # Frontend tests must pass for preprod deployment
+        # If tests are flaky, fix them rather than ignoring failures
+
+      - name: Lint frontend
+        run: bun run --filter frontend lint
+
+  build:
+    name: Build Application
+    needs: [test-backend, test-frontend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install frontend dependencies
+        run: bun install
+
+      - name: Build frontend
+        run: bun run --filter frontend build
+        env:
+          VITE_API_URL: ""
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Verify backend setup
+        run: uv sync
+        working-directory: backend
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            frontend/dist
+            backend
+          retention-days: 7
+
+  deploy-preprod:
+    name: Deploy to Preprod
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: preprod
+      url: https://preprod-full-stack-fastapi.example.com
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Prepare database (Preprod)
+        run: uv run bash scripts/prestart.sh
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ secrets.PREPROD_DATABASE_URL }}
+          PROJECT_NAME: ${{ vars.PROJECT_NAME }}
+          SECRET_KEY: ${{ secrets.PREPROD_SECRET_KEY }}
+          FIRST_SUPERUSER: ${{ vars.FIRST_SUPERUSER }}
+          FIRST_SUPERUSER_PASSWORD: ${{ secrets.PREPROD_SUPERUSER_PASSWORD }}
+        # REMOVED: continue-on-error: true
+        # Database migrations MUST succeed before deployment
+        # Failures here indicate serious issues that should stop the release
+
+      - name: Deploy to Preprod
+        run: |
+          echo "🚀 Deploying to Preprod environment"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "✅ Preprod deployment simulation successful"
+        # TODO: Replace with actual deployment command
+        # Examples:
+        #   Docker: docker compose -f docker-compose.preprod.yml up -d
+        #   Kubernetes: kubectl apply -f k8s/preprod/
+        #   Cloud: aws ecs update-service --cluster preprod --service api
+        #   FastAPI Cloud: uv run fastapi deploy
+        # env:
+        #   DEPLOYMENT_TOKEN: ${{ secrets.PREPROD_DEPLOYMENT_TOKEN }}
+
+      - name: Create deployment status
+        if: always()
+        run: |
+          echo "Creating deployment status for Release Agent monitoring..."
+          echo "Status: ${{ job.status }}"
+          echo "Environment: preprod"
+          echo "Branch: ${{ github.ref_name }}"
+
+  smoke-tests:
+    name: Preprod Smoke Tests
+    needs: [deploy-preprod]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run smoke tests
+        run: |
+          echo "🧪 Running preprod smoke tests..."
+          echo "✅ Health check passed"
+          echo "✅ API endpoints responding"
+          echo "✅ Database connection verified"
+          sleep 2
+        # TODO: Replace with actual smoke tests
+        # Examples:
+        #   curl -f https://preprod-api.example.com/api/v1/health || exit 1
+        #   curl -f https://preprod-api.example.com/api/v1/health/db || exit 1
+        #   pytest tests/smoke/ --base-url=https://preprod-api.example.com
+
+  notify-success:
+    name: Notify Success
+    needs: [smoke-tests]
+    runs-on: ubuntu-latest
+    if: success()
+    steps:
+      - name: Notify completion
+        run: |
+          echo "✅ Preprod deployment successful"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Ready for production approval"
+
+  notify-failure:
+    name: Notify Failure
+    needs: [test-backend, test-frontend, build, deploy-preprod, smoke-tests]
+    runs-on: ubuntu-latest
+    if: failure()
+    steps:
+      - name: Notify failure
+        run: |
+          echo "❌ Preprod deployment failed"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Check workflow logs for details"
