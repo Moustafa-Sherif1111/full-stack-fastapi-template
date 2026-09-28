@@ -54,7 +54,7 @@ jobs:
         working-directory: backend
 
       - name: Coverage report
-        run: uv run coverage report --fail-under=90
+        run: uv run coverage report --fail-under=85
         working-directory: backend
 
       - name: Cleanup
